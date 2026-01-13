@@ -1,0 +1,75 @@
+# CME 数据下载器 - Crontab 配置示例
+#
+# 使用方法：
+# 1. 根据你的实际环境修改路径
+# 2. 执行: crontab -e
+# 3. 复制下面的行到 crontab 编辑器中
+# 4. 保存退出
+#
+# 验证：crontab -l
+
+# ===== 基本配置 =====
+
+# 设置邮件接收地址（可选，用于接收 cron 执行结果）
+# MAILTO="your.email@example.com"
+
+# 设置 PATH（避免找不到命令）
+# PATH=/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin
+
+# ===== 定时任务配置 =====
+
+# 每天 11:00 执行（北京时间）
+# 注意：请将 /Users/liulu/autoCME 改为你的实际路径
+0 11 * * * /Users/liulu/autoCME/run.sh
+
+# ===== 其他时间示例 =====
+
+# 每天 09:00 执行
+# 0 9 * * * /Users/liulu/autoCME/run.sh
+
+# 每天 09:00 和 18:00 执行（两次）
+# 0 9,18 * * * /Users/liulu/autoCME/run.sh
+
+# 工作日 11:00 执行（周一到周五）
+# 0 11 * * 1-5 /Users/liulu/autoCME/run.sh
+
+# 每2小时执行一次
+# 0 */2 * * * /Users/liulu/autoCME/run.sh
+
+# 每周一 10:00 执行
+# 0 10 * * 1 /Users/liulu/autoCME/run.sh
+
+# ===== Crontab 时间格式说明 =====
+#
+# ┌───────────── 分钟   (0 - 59)
+# │ ┌───────────── 小时   (0 - 23)
+# │ │ ┌───────────── 日期   (1 - 31)
+# │ │ │ ┌───────────── 月份   (1 - 12)
+# │ │ │ │ ┌───────────── 星期   (0 - 7, 0和7都代表星期日)
+# │ │ │ │ │
+# * * * * * 要执行的命令
+#
+# 特殊字符说明：
+# * : 匹配所有值
+# , : 列表分隔符，例如 1,3,5 表示 1、3、5
+# - : 范围，例如 1-5 表示 1、2、3、4、5
+# / : 步长，例如 */2 表示每隔2个单位
+#
+# ===== 调试技巧 =====
+#
+# 1. 测试脚本是否可以执行：
+#    /Users/liulu/autoCME/run.sh
+#
+# 2. 查看 crontab 是否生效：
+#    crontab -l
+#
+# 3. 查看执行日志：
+#    tail -f /Users/liulu/autoCME/logs/cron.log
+#    tail -f /Users/liulu/autoCME/logs/cme_downloader.log
+#
+# 4. 临时测试（2分钟后执行）：
+#    假设现在是 14:30，设置 14:32 执行
+#    32 14 * * * /Users/liulu/autoCME/run.sh
+#
+# 5. 查看系统 cron 日志：
+#    grep CRON /var/log/system.log

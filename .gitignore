@@ -1,0 +1,59 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+venv/
+ENV/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Logs
+logs/*.log
+logs/*.log.*
+*.log
+
+# Data (optional - uncomment if you don't want to track data files)
+# data/
+# *.pdf
+# *.xls
+# *.xlsx
+# *.csv
+
+# Local config (if you create environment-specific configs)
+local_config.py
+.env
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Test files
+test_*.py
+*_test.py
