@@ -1,18 +1,37 @@
-# CME 数据自动下载器
+# CME 数据自动化系统
 
 ## 项目简介
 
-这是一个轻量级的 Python 脚本，用于自动从 CME（芝加哥商品交易所）官网下载金融数据报告。支持定时任务，适用于 macOS (Apple Silicon) 环境。
+这是一个完整的 CME（芝加哥商品交易所）金融数据自动化系统，包含两个阶段：
+
+**阶段一：数据下载** - 从 CME 官网自动下载金融数据报告
+**阶段二：ETL 数据清洗与入库** - 解析报告并存入数据库
+
+适用于 macOS (Apple Silicon) 环境，支持定时任务，为后续数据分析奠定基础。
+
+### 系统架构
+
+```
+下载 (main.py) → 文件存储 → ETL 解析 (etl_main.py) → SQLite 数据库 → 数据分析
+```
 
 ### 主要特性
 
+**阶段一：数据下载**
 - ✅ 自动下载 5 类 CME 金融数据报告（PDF/XLS）
 - ✅ 智能文件重命名（添加日期前缀，便于归档）
 - ✅ 完整的日志记录和错误处理
 - ✅ 反爬虫机制（User-Agent、重试策略）
 - ✅ 支持 crontab 定时任务
 - ✅ 幂等性设计（避免重复下载）
-- ✅ 预留数据库接口（便于后续扩展）
+
+**阶段二：ETL 数据处理**（新增）
+- ✅ 自动解析 CSV/XLS 库存报告（提取 Activity Date、仓库数据）
+- ✅ 自动解析 PDF 交割通知（处理分块表格、合约信息提取）
+- ✅ 结构化存储到 SQLite 数据库
+- ✅ 数字清洗（处理 "1,234.56" 格式）
+- ✅ 文件处理日志（避免重复处理）
+- ✅ 可选文件归档功能
 
 ### 下载的文件
 
@@ -485,9 +504,109 @@ A: 可以在 `main.py` 中添加邮件发送功能，或使用系统 cron 邮件
 
 ---
 
+## ETL 数据处理（第二阶段）
+
+### 快速开始
+
+完成下载系统安装后，开始使用 ETL 功能：
+
+1. **安装 ETL 依赖**
+```bash
+# 已包含在 requirements.txt 中
+pip3 install pandas openpyxl pdfplumber
+```
+
+2. **手动运行 ETL**
+```bash
+# 处理所有未处理的文件
+python3 etl_main.py
+
+# 重新处理所有文件
+python3 etl_main.py --reprocess
+
+# 处理后归档文件
+python3 etl_main.py --archive
+
+# 查看统计信息
+python3 etl_main.py --stats
+```
+
+3. **配置自动化 ETL**
+```bash
+# 给脚本添加执行权限
+chmod +x etl_run.sh
+
+# 编辑 crontab
+crontab -e
+
+# 添加定时任务（下载完成 30 分钟后执行 ETL）
+0 11 * * * /Users/liulu/autoCME/run.sh          # 下载数据
+30 11 * * * /Users/liulu/autoCME/etl_run.sh     # ETL 处理
+```
+
+4. **查询数据**
+```bash
+# 使用 SQLite 命令行
+sqlite3 data/cme_data.db
+
+# 查询黄金库存
+SELECT activity_date, SUM(total) as total_stock
+FROM inventory_history
+WHERE product = 'Gold'
+GROUP BY activity_date
+ORDER BY activity_date DESC
+LIMIT 10;
+
+# 查询交割量
+SELECT intent_date, product, SUM(daily_total) as total_delivery
+FROM delivery_notices
+WHERE report_type = 'Daily'
+GROUP BY intent_date, product
+ORDER BY intent_date DESC
+LIMIT 10;
+```
+
+### 数据库结构
+
+**inventory_history（库存历史表）**
+- 主键：(activity_date, product, depository)
+- 字段：registered（注册仓单）、eligible（有效货源）、total（总库存）
+
+**delivery_notices（交割通知表）**
+- 主键：(intent_date, product, contract_month, report_type)
+- 字段：daily_total（当日交割量）、cumulative（累计交割量）
+
+**file_processing_log（文件处理日志）**
+- 主键：file_path
+- 用途：跟踪已处理文件，避免重复处理
+
+### 详细文档
+
+完整的 ETL 使用指南请参考：**[ETL_README.md](ETL_README.md)**
+
+包含：
+- 架构设计详解
+- 解析器工作原理
+- 数据库查询示例
+- 故障排查指南
+- 性能优化建议
+- 扩展开发指南
+
+---
+
 ## 更新日志
 
-### v1.0.0 (2024-01-13)
+### v2.0.0 (2024-01-13) - ETL 功能
+- 新增 ETL 数据处理模块
+- 新增库存报告解析器（CSV/XLS）
+- 新增交割通知解析器（PDF，使用 pdfplumber）
+- 新增 SQLite 数据库管理模块
+- 新增文件处理日志功能（幂等性）
+- 新增文件归档功能
+- 新增数据库查询 API
+- 详细的 ETL 文档（ETL_README.md）
+
+### v1.0.0 (2024-01-13) - 下载功能
 - 初始版本发布
 - 支持 5 类 CME 数据文件自动下载
 - 完整的日志记录和错误处理
