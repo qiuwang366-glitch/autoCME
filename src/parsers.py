@@ -382,10 +382,16 @@ class DeliveryNoticeParser(BaseParser):
         """
         解析 PDF 单页
 
-        关键逻辑：
-        1. 先提取页面文本，识别 "CONTRACT:" 标题
-        2. 提取表格数据
-        3. 将 CONTRACT 信息与表格数据关联
+        实际PDF结构：
+        1. CONTRACT: JANUARY 2026 ALUMINUM FUTURES
+        2. SETTLEMENT: XXX, INTENT DATE: 01/12/2026, DELIVERY DATE: 01/14/2026
+        3. 表格（公司列表）
+        4. TOTAL: 15 (issued), 15 (stopped)
+        5. MONTH TO DATE: 134
+
+        提取策略：
+        - 从文本提取 CONTRACT、INTENT DATE
+        - 从文本提取 TOTAL 和 MONTH TO DATE 汇总数据
 
         Args:
             page: pdfplumber Page 对象
@@ -404,86 +410,141 @@ class DeliveryNoticeParser(BaseParser):
             if not text:
                 return []
 
-            # 提取所有 CONTRACT 标题
-            contracts = self._extract_contracts(text)
+            # 按行分割文本
+            lines = text.split('\n')
 
-            if not contracts:
-                self.logger.warning("未找到 CONTRACT 标题")
-                return []
+            # 解析每个合约块
+            i = 0
+            while i < len(lines):
+                line = lines[i].strip()
 
-            # 提取表格
-            tables = page.extract_tables()
+                # 查找 CONTRACT 行
+                if line.startswith('CONTRACT:'):
+                    # 提取合约信息
+                    contract_info = self._extract_contract_from_line(line)
 
-            if not tables:
-                self.logger.warning("未找到表格数据")
-                return []
+                    if contract_info:
+                        # 查找 INTENT DATE（通常在 CONTRACT 后面几行）
+                        intent_date = None
+                        daily_issued = None
+                        daily_stopped = None
+                        cumulative = None
 
-            # 关联 CONTRACT 与表格
-            # 策略：根据 CONTRACT 在文本中的位置，判断它对应哪个表格
-            for contract_info in contracts:
-                self.logger.info(f"处理合约: {contract_info['product']} {contract_info['contract_month']}")
+                        # 向前查找相关信息（最多查找20行）
+                        for j in range(i + 1, min(i + 20, len(lines))):
+                            next_line = lines[j].strip()
 
-                # 查找对应的表格（简化处理：假设每个 CONTRACT 后紧跟一个表格）
-                for table in tables:
-                    table_records = self._parse_table(
-                        table,
-                        contract_info,
-                        source_file,
-                        report_type
-                    )
-                    records.extend(table_records)
+                            # 提取 INTENT DATE
+                            if 'INTENT DATE:' in next_line:
+                                date_match = re.search(r'INTENT DATE:\s*(\d{2}/\d{2}/\d{4})', next_line)
+                                if date_match:
+                                    intent_date = self.parse_date_string(date_match.group(1))
+
+                            # 提取 TOTAL（Daily数据）
+                            if next_line.startswith('TOTAL:'):
+                                # 格式: "TOTAL: 15 15" 或 "TOTAL: 15"
+                                numbers = re.findall(r'\d+', next_line)
+                                if len(numbers) >= 2:
+                                    daily_issued = int(numbers[0])
+                                    daily_stopped = int(numbers[1])
+                                elif len(numbers) == 1:
+                                    daily_stopped = int(numbers[0])
+
+                            # 提取 MONTH TO DATE（Cumulative）
+                            if 'MONTH TO DATE:' in next_line:
+                                # 格式: "MONTH TO DATE: 134"
+                                numbers = re.findall(r'\d+', next_line)
+                                if numbers:
+                                    cumulative = int(numbers[-1])  # 取最后一个数字
+
+                            # 如果遇到下一个 CONTRACT，停止查找
+                            if next_line.startswith('CONTRACT:') or next_line.startswith('EXCHANGE:'):
+                                break
+
+                        # 如果找到了有效数据，创建记录
+                        if intent_date and (daily_stopped is not None or cumulative is not None):
+                            record = {
+                                'intent_date': intent_date,
+                                'product': contract_info['product'],
+                                'contract_month': contract_info['contract_month'],
+                                'daily_total': daily_stopped,  # 使用 STOPPED 作为 daily_total
+                                'cumulative': cumulative,
+                                'report_type': report_type,
+                                'source_file': source_file
+                            }
+
+                            records.append(record)
+                            self.logger.info(f"提取记录: {contract_info['product']} {contract_info['contract_month']}, "
+                                           f"Intent: {intent_date}, Daily: {daily_stopped}, Cumulative: {cumulative}")
+
+                i += 1
 
         except Exception as e:
             self.logger.error(f"解析页面失败: {e}", exc_info=True)
 
         return records
 
-    def _extract_contracts(self, text: str) -> List[Dict[str, str]]:
+    def _extract_contract_from_line(self, line: str) -> Optional[Dict[str, str]]:
         """
-        从文本中提取 CONTRACT 信息
+        从 CONTRACT 行提取合约信息
 
-        示例文本：
-        "CONTRACT: JANUARY 2026 COMEX 100 GOLD FUTURES"
-        "CONTRACT: FEBRUARY 2026 COMEX 5000 SILVER FUTURES"
+        支持多种格式：
+        - "CONTRACT: JANUARY 2026 ALUMINUM FUTURES"
+        - "CONTRACT: JANUARY 2026 COMEX 100 GOLD FUTURES"
+        - "CONTRACT: JANUARY 2026 COMEX COPPER FUTURES"
+        - "CONTRACT: JANUARY 2026 COMEX 5000 SILVER FUTURES"
 
         Args:
-            text: 页面文本
+            line: CONTRACT 行文本
 
         Returns:
-            合约信息列表
+            合约信息字典，或 None
         """
-        contracts = []
+        # 正则表达式策略：
+        # 1. 匹配月份（JANUARY等）
+        # 2. 匹配年份（2026）
+        # 3. 可选的 COMEX 和数字
+        # 4. 匹配产品名（ALUMINUM, GOLD, COPPER, SILVER等）
 
-        # 使用正则表达式匹配 CONTRACT 行
-        pattern = r'CONTRACT:\s*([A-Z]+)\s+(\d{4})\s+COMEX\s+\d+\s+([A-Z]+)'
+        # 先尝试匹配带 COMEX 的格式
+        pattern1 = r'CONTRACT:\s*([A-Z]+)\s+(\d{4})\s+COMEX\s+(?:\d+\s+)?([A-Z]+)\s+FUTURES'
+        match = re.search(pattern1, line)
 
-        matches = re.finditer(pattern, text)
+        if match:
+            month = match.group(1)
+            year = match.group(2)
+            product = match.group(3)
 
-        for match in matches:
-            month = match.group(1)  # JANUARY
-            year = match.group(2)    # 2026
-            product = match.group(3) # GOLD
-
-            contract_info = {
+            return {
                 'contract_month': f"{month} {year}",
-                'product': product.title(),  # Gold, Silver
-                'full_text': match.group(0)
+                'product': product.title(),
+                'full_text': line
             }
 
-            contracts.append(contract_info)
-            self.logger.debug(f"找到合约: {contract_info}")
+        # 再尝试匹配不带 COMEX 的格式
+        pattern2 = r'CONTRACT:\s*([A-Z]+)\s+(\d{4})\s+([A-Z]+)\s+FUTURES'
+        match = re.search(pattern2, line)
 
-        return contracts
+        if match:
+            month = match.group(1)
+            year = match.group(2)
+            product = match.group(3)
+
+            return {
+                'contract_month': f"{month} {year}",
+                'product': product.title(),
+                'full_text': line
+            }
+
+        self.logger.warning(f"无法解析 CONTRACT 行: {line}")
+        return None
 
     def _parse_table(self, table: List[List[str]], contract_info: Dict[str, str],
                     source_file: str, report_type: str) -> List[Dict[str, Any]]:
         """
-        解析表格数据
+        解析表格数据（已弃用，保留用于兼容性）
 
-        表格通常包含列：
-        - Intent Date (或 Date)
-        - Daily Total (或 Daily)
-        - Cumulative (或 Cum.)
+        注：当前实现直接从文本提取汇总数据，不再使用表格解析
 
         Args:
             table: 表格数据（二维列表）
@@ -492,69 +553,11 @@ class DeliveryNoticeParser(BaseParser):
             report_type: 报告类型
 
         Returns:
-            记录列表
+            空列表（不再使用表格解析）
         """
-        if not table or len(table) < 2:
-            return []
-
-        records = []
-
-        # 第一行通常是表头
-        header = [str(cell).strip().lower() if cell else '' for cell in table[0]]
-
-        # 查找列索引
-        date_col_idx = None
-        daily_col_idx = None
-        cumulative_col_idx = None
-
-        for idx, col_name in enumerate(header):
-            if 'intent' in col_name or 'date' in col_name:
-                date_col_idx = idx
-            elif 'daily' in col_name:
-                daily_col_idx = idx
-            elif 'cumulative' in col_name or 'cum' in col_name:
-                cumulative_col_idx = idx
-
-        if date_col_idx is None:
-            self.logger.warning("未找到日期列")
-            return []
-
-        # 解析数据行（跳过表头）
-        for row in table[1:]:
-            if not row or len(row) <= date_col_idx:
-                continue
-
-            # 提取日期
-            date_str = str(row[date_col_idx]).strip() if row[date_col_idx] else None
-            if not date_str or date_str == '':
-                continue
-
-            intent_date = self.parse_date_string(date_str)
-            if not intent_date:
-                continue
-
-            # 提取数值
-            daily_total = None
-            if daily_col_idx is not None and len(row) > daily_col_idx:
-                daily_total = self.clean_numeric_string(row[daily_col_idx])
-
-            cumulative = None
-            if cumulative_col_idx is not None and len(row) > cumulative_col_idx:
-                cumulative = self.clean_numeric_string(row[cumulative_col_idx])
-
-            record = {
-                'intent_date': intent_date,
-                'product': contract_info['product'],
-                'contract_month': contract_info['contract_month'],
-                'daily_total': int(daily_total) if daily_total is not None else None,
-                'cumulative': int(cumulative) if cumulative is not None else None,
-                'report_type': report_type,
-                'source_file': source_file
-            }
-
-            records.append(record)
-
-        return records
+        # 新的解析逻辑直接从文本提取汇总数据
+        # 此方法保留仅为向后兼容
+        return []
 
 
 if __name__ == "__main__":
