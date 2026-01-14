@@ -192,6 +192,19 @@ class CMEDataETL:
                 report_type = self.detect_report_type(file_path.name)
                 self.logger.info(f"报告类型: {report_type}")
 
+                # 跳过 YTD 报告（格式不同，暂不支持）
+                if report_type == 'YTD':
+                    self.logger.warning(f"YTD 报告格式不同，暂不支持解析，跳过: {file_path.name}")
+                    self.db_manager.log_file_processing(
+                        str(file_path),
+                        file_path.name,
+                        'delivery',
+                        file_size,
+                        'skipped',
+                        error_message="YTD 报告格式不支持（与 Daily/Monthly 格式不同）"
+                    )
+                    return False
+
                 records = self.delivery_parser.parse_file(file_path, report_type)
 
                 if records:
